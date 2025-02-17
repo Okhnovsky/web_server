@@ -2,6 +2,8 @@ import asyncio
 import socket
 import logging
 from asyncio import AbstractEventLoop
+import signal
+from typing import List
 
 
 async def echo(connection: socket, loop: AbstractEventLoop) -> None:
@@ -17,6 +19,9 @@ async def echo(connection: socket, loop: AbstractEventLoop) -> None:
         connection.close()
 
 
+echo_tasks = []
+
+
 async def listen_for_connections(server_socket: socket,
                                  loop: AbstractEventLoop):
     while True:
@@ -24,6 +29,24 @@ async def listen_for_connections(server_socket: socket,
         connection.setblocking(False)
         print(f"Получен запрос на подключение от {address}")
         asyncio.create_task(echo(connection, loop))
+        echo_tasks.append(echo_tasks)
+
+
+class GracefulExit(SystemExit):
+    pass
+
+
+def shutdown():
+    raise GracefulExit
+
+
+async def close_echo_tasks(echo_tasks: List[asyncio.Task]):
+    waiters = [asyncio.wait_for(task, 2) for task in echo_tasks]
+    for task in waiters:
+        try:
+            await task
+        except asyncio.exceptions.TimeoutError:
+            pass
 
 
 async def main():
@@ -35,7 +58,16 @@ async def main():
     server_socket.bind(server_address)
     server_socket.listen()
 
-    await listen_for_connections(server_socket, asyncio.get_event_loop())
+    for signame in {'SIGINT', 'SIGTERM'}:
+        loop.add_signal_handler(getattr(signal, signame), shutdown)
+    await listen_for_connections(server_socket, loop)
 
 
-asyncio.run(main())
+loop = asyncio.new_event_loop()
+
+try:
+    loop.run_until_complete(main())
+except GracefulExit:
+    loop.run_until_complete(close_echo_tasks(echo_tasks))
+finally:
+    loop.close()
